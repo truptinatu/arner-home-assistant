@@ -349,6 +349,53 @@
     }
     #manage-footer button:hover { border-color: var(--accent); color: var(--accent); }
 
+    /* ── Password overlay ────────────────────────────────────────── */
+    #pw-overlay {
+      position: fixed; inset: 0; z-index: 999;
+      background: var(--dark);
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column;
+    }
+    #pw-box {
+      background: #27231f; border-radius: 24px;
+      padding: 36px 32px; width: 90%; max-width: 360px;
+      display: flex; flex-direction: column; align-items: center; gap: 20px;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+    }
+    #pw-box .pw-icon  { font-size: 2.4rem; }
+    #pw-box .pw-title { font-size: 1.1rem; font-weight: 700; color: white; letter-spacing: -0.01em; }
+    #pw-box .pw-sub   { font-size: 0.8rem; color: rgba(255,255,255,0.4); text-align: center; margin-top: -12px; }
+    #pw-input {
+      width: 100%; background: rgba(255,255,255,0.07);
+      border: 1.5px solid rgba(255,255,255,0.12);
+      border-radius: 12px; padding: 13px 16px;
+      font-family: inherit; font-size: 1rem; color: white;
+      outline: none; text-align: center; letter-spacing: 0.1em;
+      transition: border-color 0.2s;
+    }
+    #pw-input::placeholder { color: rgba(255,255,255,0.25); letter-spacing: 0; }
+    #pw-input:focus { border-color: var(--accent); }
+    #pw-btn {
+      width: 100%; background: var(--accent); color: white; border: none;
+      border-radius: 12px; padding: 13px; font-family: inherit;
+      font-size: 0.95rem; font-weight: 600; cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    #pw-btn:hover  { opacity: 0.88; }
+    #pw-btn:active { transform: scale(0.97); }
+    #pw-error {
+      font-size: 0.78rem; color: #f87171; min-height: 18px;
+      text-align: center; margin-top: -10px;
+    }
+    @keyframes shake {
+      0%,100%{transform:translateX(0)}
+      20%{transform:translateX(-8px)}
+      40%{transform:translateX(8px)}
+      60%{transform:translateX(-6px)}
+      80%{transform:translateX(6px)}
+    }
+    #pw-box.shake { animation: shake 0.4s ease; }
+
     /* ── Scrollbar ───────────────────────────────────────────────── */
     ::-webkit-scrollbar { width: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -357,6 +404,18 @@
 </head>
 <body>
 
+<!-- ░░ Password overlay ░░ -->
+<div id="pw-overlay">
+  <div id="pw-box">
+    <div class="pw-icon">🏠</div>
+    <div class="pw-title">Home Assistant</div>
+    <div class="pw-sub">Enter password to continue</div>
+    <input id="pw-input" type="password" placeholder="Password" autocomplete="current-password" />
+    <div id="pw-error"></div>
+    <button id="pw-btn" onclick="checkPassword()">Unlock</button>
+  </div>
+</div>
+
 <!-- ░░ Header ░░ -->
 <header>
   <span class="header-icon">🏠</span>
@@ -364,6 +423,7 @@
   <span class="header-count" id="count">— items</span>
   <div class="header-actions">
     <button class="icon-btn" onclick="openSettings()" title="Sync settings">⚙️</button>
+    <button class="icon-btn" onclick="lockApp()" title="Lock">🔒</button>
   </div>
 </header>
 
@@ -456,8 +516,10 @@
 // ─────────────────────────────────────────────
 let inventory = [];
 let fuse;
-const STORE_KEY = "ha_inventory_v3";
-const SETT_KEY  = "ha_settings";
+// Key is path-scoped so each deployment has its own storage
+const _pathKey  = location.pathname.replace(/\//g, "_").replace(/^_|_$/g, "") || "root";
+const STORE_KEY = `ha_inventory_${_pathKey}`;
+const SETT_KEY  = `ha_settings_${_pathKey}`;
 
 // ─────────────────────────────────────────────
 // Boot
@@ -497,6 +559,15 @@ function switchTab(tab) {
 // Inventory persistence
 // ─────────────────────────────────────────────
 async function loadInventory() {
+  // Migrate from old shared key if new key is empty
+  const OLD_KEY = "ha_inventory_v3";
+  if (!localStorage.getItem(STORE_KEY) && localStorage.getItem(OLD_KEY)) {
+    const old = JSON.parse(localStorage.getItem(OLD_KEY));
+    if (Array.isArray(old) && old.length > 0) {
+      localStorage.setItem(STORE_KEY, JSON.stringify(old));
+      localStorage.removeItem(OLD_KEY);
+    }
+  }
   const saved = localStorage.getItem(STORE_KEY);
   if (saved) { try { inventory = JSON.parse(saved); return; } catch {} }
   try {
@@ -846,9 +917,56 @@ document.getElementById("add-location").addEventListener("keydown", e => {
 });
 
 // ─────────────────────────────────────────────
+// Auth — SHA-256 password gate
+// Change via: bash set-password.sh
+// ─────────────────────────────────────────────
+const PASSWORD_HASH = "3f8621a87f5a5470030bba47e8687829687c74dabe1372aa08ff78732adbd73f"; // default: home123
+
+async function sha256(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+async function checkPassword() {
+  const input = document.getElementById("pw-input").value;
+  if (!input) return;
+  const hash = await sha256(input);
+  if (hash === PASSWORD_HASH) {
+    sessionStorage.setItem("ha_auth", "1");
+    document.getElementById("pw-overlay").style.display = "none";
+    init();
+  } else {
+    const box = document.getElementById("pw-box");
+    box.classList.remove("shake");
+    void box.offsetWidth; // reflow to restart animation
+    box.classList.add("shake");
+    document.getElementById("pw-error").textContent = "Incorrect password — try again.";
+    document.getElementById("pw-input").value = "";
+    document.getElementById("pw-input").focus();
+  }
+}
+
+document.getElementById("pw-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") checkPassword();
+});
+
+function lockApp() {
+  sessionStorage.removeItem("ha_auth");
+  document.getElementById("pw-input").value = "";
+  document.getElementById("pw-error").textContent = "";
+  document.getElementById("pw-overlay").style.display = "flex";
+  document.getElementById("pw-input").focus();
+}
+
+// ─────────────────────────────────────────────
 // Start
 // ─────────────────────────────────────────────
-init();
+if (sessionStorage.getItem("ha_auth") === "1") {
+  document.getElementById("pw-overlay").style.display = "none";
+  init();
+} else {
+  document.getElementById("pw-input").focus();
+}
 </script>
 </body>
 </html>
