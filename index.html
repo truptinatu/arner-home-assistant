@@ -115,7 +115,8 @@
 
     /* ── Settings modal ──────────────────────────────────────────── */
     #settings-overlay {
-      display: none; position: fixed; inset: 0;
+      display: none; position: fixed; top: 0; left: 0; right: 0;
+      height: var(--app-height, 100dvh);
       background: rgba(0,0,0,0.4); z-index: 60;
       backdrop-filter: blur(4px);
       align-items: center; justify-content: center;
@@ -267,7 +268,7 @@
     @media (min-width: 640px) {
       .manage-add-fields { flex-direction: row; align-items: stretch; }
       .manage-add-fields input { width: auto; flex: 1; }
-      .manage-add-btn { width: auto; }
+      .manage-add-btn { width: auto; min-width: 88px; }
     }
 
     /* search bar in manage */
@@ -412,7 +413,8 @@
 
     /* ── Password overlay ────────────────────────────────────────── */
     #pw-overlay {
-      position: fixed; inset: 0; z-index: 999;
+      position: fixed; top: 0; left: 0; right: 0; z-index: 999;
+      height: var(--app-height, 100dvh);
       background: var(--dark);
       display: flex; align-items: center; justify-content: center;
       flex-direction: column;
@@ -422,6 +424,7 @@
     #pw-box {
       background: #27231f; border-radius: 24px;
       padding: 32px 22px; width: min(360px, 100%);
+      max-height: 100%; overflow-y: auto;
       display: flex; flex-direction: column; align-items: center; gap: 20px;
       box-shadow: 0 24px 64px rgba(0,0,0,0.5);
     }
@@ -1044,7 +1047,7 @@ document.getElementById("add-location").addEventListener("keydown", e => {
 // Auth — SHA-256 password gate
 // Change via: bash set-password.sh
 // ─────────────────────────────────────────────
-const PASSWORD_HASH = "3f8621a87f5a5470030bba47e8687829687c74dabe1372aa08ff78732adbd73f"; // default: home123
+const PASSWORD_HASH = "3f8621a87f5a5470030bba47e8687829687c74dabe1372aa08ff78732adbd73f"; // set via set-password.sh; do not commit secrets
 
 async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
