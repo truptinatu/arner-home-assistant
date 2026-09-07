@@ -401,13 +401,17 @@
       display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0;
     }
     #manage-footer > button,
-    #manage-footer > label { flex: 1 1 140px; min-width: 0; }
+    #manage-footer > label {
+      flex: 1 1 160px;
+      min-width: min(100%, 160px);
+      max-width: 100%;
+    }
     #manage-footer button {
       min-height: 44px; padding: 12px; border-radius: 10px;
       border: 1.5px solid var(--border); background: var(--surface);
       font-family: inherit; font-size: 0.88rem; font-weight: 500;
       cursor: pointer; transition: all 0.15s; color: var(--dark);
-      width: 100%;
+      width: 100%; white-space: normal; overflow-wrap: anywhere;
     }
     #manage-footer button:hover { border-color: var(--accent); color: var(--accent); }
 
@@ -558,11 +562,11 @@
   <!-- Add new item -->
   <div id="manage-add">
     <div class="manage-add-title">➕ Add an item</div>
-    <div class="manage-add-fields">
+    <form id="manage-add-form" class="manage-add-fields" action="#">
       <input id="add-item"     type="text" placeholder="What is it? (tape, towels…)" enterkeyhint="next" />
       <input id="add-location" type="text" placeholder="Where do you keep it?" enterkeyhint="done" />
-      <button class="manage-add-btn" onclick="manageAdd()">Add</button>
-    </div>
+      <button type="submit" class="manage-add-btn">Add</button>
+    </form>
   </div>
 
   <!-- Search -->
@@ -613,21 +617,37 @@ function welcomeHtml() {
       Nothing is stored yet. Open <b>Manage</b>, type an item and where you keep it, then tap Add.<br>
       After that, come back here and ask things like “where are the extra towels?”
       <div class="chips">
-        <button class="chip" onclick="switchTab('manage')">📋 Add your first item</button>
+        <button type="button" class="chip" data-tab="manage">📋 Add your first item</button>
       </div>`;
   }
-  const samples = inventory.slice(0, 2).map(i =>
-    `<button class="chip" onclick="ask('where is the ${escHtml(i.item)}?')">${escHtml(i.item)}?</button>`
-  ).join("");
+  const samples = inventory.slice(0, 2).map(i => {
+    const idx = inventory.indexOf(i);
+    return `<button type="button" class="chip" data-ask-idx="${idx}">${escHtml(i.item)}?</button>`;
+  }).join("");
   return `Hey! 👋 Ask me where anything is — just type what you’re looking for.
     <div class="chips">
       ${samples}
-      <button class="chip" onclick="ask('list')">Show everything</button>
-      <button class="chip" onclick="switchTab('manage')">Add or edit items</button>
+      <button type="button" class="chip" data-ask="list">Show everything</button>
+      <button type="button" class="chip" data-tab="manage">Add or edit items</button>
     </div>`;
 }
 
 function ask(q) { document.getElementById("input").value = q; handleSend(); }
+
+document.getElementById("chat").addEventListener("click", e => {
+  const btn = e.target.closest("[data-tab], [data-ask], [data-ask-idx]");
+  if (!btn) return;
+  if (btn.hasAttribute("data-tab")) {
+    switchTab(btn.getAttribute("data-tab"));
+    return;
+  }
+  if (btn.hasAttribute("data-ask-idx")) {
+    const item = inventory[Number(btn.getAttribute("data-ask-idx"))];
+    if (item) ask(`where is the ${item.item}?`);
+    return;
+  }
+  ask(btn.getAttribute("data-ask"));
+});
 
 // ─────────────────────────────────────────────
 // Tab switching
@@ -749,7 +769,14 @@ function appendBubble(html, who, cls = "") {
 }
 function appendUser(text) { appendBubble(escHtml(text), "user"); }
 function appendBot(html, cls = "") { appendBubble(html, "bot", cls); }
-function escHtml(t) { return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function escHtml(t) {
+  return String(t)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 function showTyping() {
   const chat = document.getElementById("chat");
   const row = document.createElement("div"); row.className = "msg-row bot"; row.id = "typing-indicator";
@@ -794,7 +821,7 @@ function handleSearch(query) {
     appendBot(`I don’t have <b>${escHtml(cleaned)}</b> on the list yet.<br>
       Add it in Manage — name and where you keep it.
       <div class="chips">
-        <button class="chip" onclick="switchTab('manage')">➕ Add it in Manage</button>
+        <button type="button" class="chip" data-tab="manage">➕ Add it in Manage</button>
       </div>`, "error");
     return;
   }
@@ -818,7 +845,7 @@ function handleAdd(raw) {
   const sep  = body.includes("→") ? "→" : body.includes("->") ? "->" : null;
   if (!sep) {
     appendBot(`Easiest: open the <b>Manage</b> tab and fill in the name and location.
-      <div class="chips"><button class="chip" onclick="switchTab('manage')">Go to Manage</button></div>
+      <div class="chips"><button type="button" class="chip" data-tab="manage">Go to Manage</button></div>
       Or type: <code style="background:var(--bg);padding:2px 6px;border-radius:4px;font-size:0.82rem">add: item → location</code>`, "error");
     return;
   }
@@ -854,7 +881,7 @@ function handleDelete(raw) {
 function handleList() {
   if (inventory.length === 0) {
     appendBot(`Nothing stored yet.
-      <div class="chips"><button class="chip" onclick="switchTab('manage')">Add your first item</button></div>`);
+      <div class="chips"><button type="button" class="chip" data-tab="manage">Add your first item</button></div>`);
     return;
   }
   const sorted = [...inventory].sort((a, b) => a.item.localeCompare(b.item));
@@ -1006,41 +1033,38 @@ function importJSON(e) {
 // Keyboard + mobile viewport (safe area / IME)
 // ─────────────────────────────────────────────
 function bindAppHeight() {
+  let last = "";
   const apply = () => {
     const vv = window.visualViewport;
-    const height = vv ? vv.height : window.innerHeight;
-    document.documentElement.style.setProperty("--app-height", `${Math.round(height)}px`);
-    if (document.activeElement && document.activeElement.matches("input")) {
-      window.scrollTo(0, 0);
-    }
+    const height = `${Math.round(vv ? vv.height : window.innerHeight)}px`;
+    if (height === last) return;
+    last = height;
+    document.documentElement.style.setProperty("--app-height", height);
   };
   apply();
   window.visualViewport?.addEventListener("resize", apply);
-  window.visualViewport?.addEventListener("scroll", apply);
-  window.addEventListener("resize", apply);
   window.addEventListener("orientationchange", apply);
 }
 bindAppHeight();
 
-document.addEventListener("focusin", e => {
-  if (!e.target.matches("input")) return;
-  setTimeout(() => {
-    e.target.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    const chat = document.getElementById("chat");
-    if (document.getElementById("chat-view").classList.contains("active") && chat) {
-      chat.scrollTop = chat.scrollHeight;
-    }
-  }, 280);
-});
-
 document.getElementById("input").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
 });
+document.getElementById("manage-add-form").addEventListener("submit", e => {
+  e.preventDefault();
+  manageAdd();
+});
 document.getElementById("add-item").addEventListener("keydown", e => {
-  if (e.key === "Enter") document.getElementById("add-location").focus();
+  if (e.key === "Enter") {
+    e.preventDefault();
+    document.getElementById("add-location").focus();
+  }
 });
 document.getElementById("add-location").addEventListener("keydown", e => {
-  if (e.key === "Enter") manageAdd();
+  if (e.key === "Enter") {
+    e.preventDefault();
+    manageAdd();
+  }
 });
 
 // ─────────────────────────────────────────────
