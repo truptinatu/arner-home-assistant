@@ -6,8 +6,12 @@
   <meta name="theme-color" content="#1c1917"/>
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-title" content="Home Assistant"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
   <title>🏠 Home Assistant</title>
+  <link rel="manifest" href="manifest.webmanifest"/>
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"/>
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png"/>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0/dist/fuse.min.js"></script>
@@ -130,6 +134,10 @@
       overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
     }
     #settings-modal h2 { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; }
+    .settings-divider { border: none; border-top: 1px solid var(--border); margin: 22px 0 18px; }
+    .pw-change-msg { font-size: 0.78rem; min-height: 18px; margin-top: 8px; color: var(--muted); }
+    .pw-change-msg.ok { color: var(--success); }
+    .pw-change-msg.err { color: var(--danger); }
     .settings-sub { font-size: 0.8rem; color: var(--muted); margin-bottom: 20px; line-height: 1.5; }
     .settings-sub a { color: var(--accent); text-decoration: none; }
     .settings-sub a:hover { text-decoration: underline; }
@@ -501,7 +509,7 @@
   <span class="header-title">Home Assistant</span>
   <span class="header-count" id="count">— items</span>
   <div class="header-actions">
-    <button class="icon-btn" onclick="openSettings()" title="Sync settings">⚙️</button>
+    <button class="icon-btn" onclick="openSettings()" title="Settings">⚙️</button>
     <button class="icon-btn" onclick="lockApp()" title="Lock">🔒</button>
   </div>
 </header>
@@ -538,6 +546,29 @@
     <div class="settings-actions">
       <button class="btn-primary" onclick="saveSettings()">Save & Sync</button>
       <button class="btn-ghost"   onclick="closeSettings()">Cancel</button>
+    </div>
+    <hr class="settings-divider" />
+    <h2>🔒 Change password</h2>
+    <p class="settings-sub">
+      The hash baked into the page is the <b>default / first-run</b> password.
+      Updating it here stores a new SHA-256 hash in this browser only — not the
+      plaintext, and not other phones. Clearing site data restores the default.
+    </p>
+    <div class="field">
+      <label for="pw-current">Current password</label>
+      <input id="pw-current" type="password" autocomplete="current-password" />
+    </div>
+    <div class="field">
+      <label for="pw-new">New password</label>
+      <input id="pw-new" type="password" autocomplete="new-password" />
+    </div>
+    <div class="field">
+      <label for="pw-confirm">Confirm new password</label>
+      <input id="pw-confirm" type="password" autocomplete="new-password" />
+    </div>
+    <p id="pw-change-msg" class="pw-change-msg" role="status"></p>
+    <div class="settings-actions">
+      <button type="button" class="btn-primary" onclick="changePassword()">Update password</button>
     </div>
   </div>
 </div>
@@ -597,6 +628,7 @@ let fuse;
 const _pathKey  = location.pathname.replace(/\//g, "_").replace(/^_|_$/g, "") || "root";
 const STORE_KEY = `ha_inventory_${_pathKey}`;
 const SETT_KEY  = `ha_settings_${_pathKey}`;
+const PW_KEY    = `ha_password_hash_${_pathKey}`;
 
 // ─────────────────────────────────────────────
 // Boot
@@ -620,10 +652,9 @@ function welcomeHtml() {
         <button type="button" class="chip" data-tab="manage">📋 Add your first item</button>
       </div>`;
   }
-  const samples = inventory.slice(0, 2).map(i => {
-    const idx = inventory.indexOf(i);
-    return `<button type="button" class="chip" data-ask-idx="${idx}">${escHtml(i.item)}?</button>`;
-  }).join("");
+  const samples = inventory.slice(0, 2).map((item, idx) =>
+    `<button type="button" class="chip" data-ask-idx="${idx}">${escHtml(item.item)}?</button>`
+  ).join("");
   return `Hey! 👋 Ask me where anything is — just type what you’re looking for.
     <div class="chips">
       ${samples}
@@ -715,6 +746,12 @@ function openSettings() {
   document.getElementById("gh-token").value = s.token  || "";
   document.getElementById("gh-gist").value  = s.gistId || "";
   setSyncStatus(s.token && s.gistId ? "ok" : "", s.token && s.gistId ? "Configured" : "Not configured");
+  document.getElementById("pw-current").value = "";
+  document.getElementById("pw-new").value = "";
+  document.getElementById("pw-confirm").value = "";
+  const pwMsg = document.getElementById("pw-change-msg");
+  pwMsg.textContent = "";
+  pwMsg.className = "pw-change-msg";
   document.getElementById("settings-overlay").classList.add("open");
 }
 function closeSettings() { document.getElementById("settings-overlay").classList.remove("open"); }
@@ -1069,20 +1106,60 @@ document.getElementById("add-location").addEventListener("keydown", e => {
 
 // ─────────────────────────────────────────────
 // Auth — SHA-256 password gate
-// Change via: bash set-password.sh
+// PASSWORD_HASH is the default / first-run hash for this device.
+// After an in-app change, this browser uses the hash in localStorage (PW_KEY).
 // ─────────────────────────────────────────────
-const PASSWORD_HASH = "3f8621a87f5a5470030bba47e8687829687c74dabe1372aa08ff78732adbd73f"; // set via set-password.sh; do not commit secrets
+const PASSWORD_HASH = "3f8621a87f5a5470030bba47e8687829687c74dabe1372aa08ff78732adbd73f"; // default only; do not commit secrets
 
 async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
 }
 
+function getPasswordHash() {
+  return localStorage.getItem(PW_KEY) || PASSWORD_HASH;
+}
+
+function setPwChangeMsg(text, kind) {
+  const el = document.getElementById("pw-change-msg");
+  el.textContent = text;
+  el.className = "pw-change-msg" + (kind ? ` ${kind}` : "");
+}
+
+async function changePassword() {
+  const current = document.getElementById("pw-current").value;
+  const next    = document.getElementById("pw-new").value;
+  const confirm = document.getElementById("pw-confirm").value;
+  if (!current || !next || !confirm) {
+    setPwChangeMsg("Fill in all three fields.", "err");
+    return;
+  }
+  if (next !== confirm) {
+    setPwChangeMsg("New passwords don’t match.", "err");
+    return;
+  }
+  const currentHash = await sha256(current);
+  if (currentHash !== getPasswordHash()) {
+    setPwChangeMsg("Current password is incorrect.", "err");
+    return;
+  }
+  const nextHash = await sha256(next);
+  if (nextHash === currentHash) {
+    setPwChangeMsg("Pick a different new password.", "err");
+    return;
+  }
+  localStorage.setItem(PW_KEY, nextHash);
+  document.getElementById("pw-current").value = "";
+  document.getElementById("pw-new").value = "";
+  document.getElementById("pw-confirm").value = "";
+  setPwChangeMsg("Password updated on this device. Use it the next time you unlock.", "ok");
+}
+
 async function checkPassword() {
   const input = document.getElementById("pw-input").value;
   if (!input) return;
   const hash = await sha256(input);
-  if (hash === PASSWORD_HASH) {
+  if (hash === getPasswordHash()) {
     sessionStorage.setItem("ha_auth", "1");
     document.getElementById("pw-overlay").style.display = "none";
     init();
@@ -1118,6 +1195,22 @@ if (sessionStorage.getItem("ha_auth") === "1") {
 } else {
   document.getElementById("pw-input").focus();
 }
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  });
+}
+
+document.getElementById("pw-current").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); document.getElementById("pw-new").focus(); }
+});
+document.getElementById("pw-new").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); document.getElementById("pw-confirm").focus(); }
+});
+document.getElementById("pw-confirm").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); changePassword(); }
+});
 </script>
 </body>
 </html>
